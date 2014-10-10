@@ -15,6 +15,13 @@ using NLog.Targets;
 
 namespace NLogExtensions.Targets
 {
+    /// <summary>
+    /// NLog target for automatic compressing of log files
+    /// It detect archived files in Path.GetDirectoryName(ArchiveFileName) directory, compare count of detected files with FilesThreshold property.
+    /// If FilesThreshold exceeded, found archived files will compressed to ZIP archive by using Deflate algorithm
+    /// Compression quality may be tuned by using CompressionLevel property.
+    /// Class use DotNetZip library for compression purpose
+    /// </summary>
     [Target("ArchiveFiles")] 
     public class ArchiveFilesTarget:FileTarget
     {
@@ -26,6 +33,11 @@ namespace NLogExtensions.Targets
         /// </summary>
         private volatile Int32 _compressingStarted;
 
+        public ArchiveFilesTarget()
+        {
+            CompressionLevel = CompressionLevel.Level9;
+        }
+
         /// <summary>
         /// How many files have to be rolled before compressing started
         /// </summary>
@@ -35,9 +47,13 @@ namespace NLogExtensions.Targets
         /// <summary>
         /// Get or set compression level for backup archiving(Level0,Level5,BestSpeed,BestCompression and etc)
         /// </summary>
-        [DefaultValue(typeof(CompressionLevel), "Level9")]
         public CompressionLevel CompressionLevel { set; get; }
 
+        /// <summary>
+        /// Path in which ZIP archive will created. 
+        /// ZIP file name may DateTime pattern which will be replaced by DateTime.Now(when this ZIP archive was created). 
+        /// DateTime pattern MUST be decorated by bracket,for instance {yyyy-MM-dd}.Path in which ZIP archive will created. ZIP file name may DateTime pattern which will be replaced by DateTime.Now(when this ZIP archive was created). DateTime pattern MUST be decorated by bracket,for instance {yyyy-MM-dd}.
+        /// </summary>
         [RequiredParameter]
         public String ZipFile
         {
@@ -102,7 +118,7 @@ namespace NLogExtensions.Targets
                 return;
             }
             ICollection<FileInfo> filesToCompress = FindFilesToCompress(archiveDirectory, archiveFilePattern);
-            if(filesToCompress.Count<FilesThreshold)
+            if(filesToCompress.Count < FilesThreshold)
             {
                 _compressingStarted = 0;
                 return;
@@ -124,7 +140,7 @@ namespace NLogExtensions.Targets
             }
             Int32 patternStart = archiveFilePattern.IndexOf('{');
             Int32 patternEnd = archiveFilePattern.IndexOf('}');
-            if(patternStart==-1 || patternEnd==-1 || patternEnd<patternStart)
+            if(patternStart==-1 || patternEnd==-1 || patternEnd < patternStart)
             {
                 InternalLogger.Error("Archive file name patter has invalid format '{}'", archiveFilePattern);
                 return new List<FileInfo>();
@@ -194,12 +210,14 @@ namespace NLogExtensions.Targets
                 return;
             }
 
+            Boolean isZipHasFiles=false;
             foreach (FileInfo logFile in filesToZip)
             {
                 try
                 {
-                    Stream fileToZip = new FileStream(logFile.FullName, FileMode.Open);
+                    Stream fileToZip = new FileStream(logFile.FullName, FileMode.Open,FileAccess.Read);
                     compressedBackups.AddEntry(logFile.Name, fileToZip);
+                    isZipHasFiles = true;
                 }
                 catch (Exception ex)
                 {
@@ -208,6 +226,12 @@ namespace NLogExtensions.Targets
                                             Environment.NewLine, 
                                             ex.ToString());
                 }
+            }
+            //if all files failed to open,skip creating ZIP archive
+            if (!isZipHasFiles)
+            {
+                _compressingStarted = 0;
+                return;
             }
             //save zip archive and delete old log files
             try
